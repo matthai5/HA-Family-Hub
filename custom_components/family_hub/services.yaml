@@ -239,3 +239,57 @@ stop_timer_alarm:
       required: false
       selector:
         text:
+adjust_balance:
+  name: Adjust balance
+  description: >-
+    Add to or subtract from someone's star balance, with an optional reason
+    for their history. For someone on real money the amount is in dollars.
+  fields:
+    user_id:
+      name: User ID
+      description: The person's Home Assistant user id.
+      required: true
+      selector:
+        text:
+    amount:
+      name: Amount
+      description: Positive to add, negative to subtract. Dollars for someone on real money, stars otherwise.
+      required: true
+      selector:
+        number:
+          min: -100000
+          max: 100000
+          step: 0.01
+          mode: box
+    reason:
+      name: Reason
+      description: Shown in their history.
+      selector:
+        text:
+pay_out:
+  name: Pay out balance
+  description: >-
+    Record money handed over against someone's balance (an IOU payment).
+    Pays the whole balance unless an amount is given. Returns the amount
+    paid and what's left.
+  fields:
+    user_id:
+      name: User ID
+      description: The person's Home Assistant user id.
+      required: true
+      selector:
+        text:
+    amount:
+      name: Amount
+      description: Optional. Dollars for someone on real money, stars otherwise. Leave out to pay everything owed.
+      selector:
+        number:
+          min: 0.01
+          max: 100000
+          step: 0.01
+          mode: box
+    reason:
+      name: Reason
+      description: Shown in their history, e.g. "FamZoo transfer". Defaults to "Paid out".
+      selector:
+        text:

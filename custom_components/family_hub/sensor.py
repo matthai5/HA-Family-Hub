@@ -51,11 +51,13 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from . import timer_engine
+from homeassistant.util import dt as dt_util
+
+from . import reward_engine, timer_engine
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,6 +80,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for entity in entities:
             entry_data["timer_sensor_entities"][entity.timer_uid] = entity
         async_add_entities(entities)
+    # jordan fork: one balance sensor per Family Hub member.
+    settings = await entry_data["settings_store"].async_load() or {} if entry_data.get("settings_store") else {}
+    balance_entities = []
+    for user_id in settings.get("memberUserIds") or []:
+        user = await hass.auth.async_get_user(user_id)
+        if user is not None and not user.system_generated:
+            balance_entities.append(FamilyHubBalanceSensor(entry_data, user_id, user.name or user_id))
+    if balance_entities:
+        async_add_entities(balance_entities, update_before_add=True)
 
 
 def create_timer_sensor(
@@ -181,3 +192,46 @@ class FamilyHubTimerSensor(SensorEntity):
             "duration_minutes": timer.get("duration_minutes"),
             "finishes_at": ends.isoformat() if ends else None,
         }
+
+
+class FamilyHubBalanceSensor(SensorEntity):
+    """jordan fork: someone's star balance, for dashboards and automations
+    (payday summaries, payout reminders, statements). For someone on real
+    money (Settings' currencyUserIds) the state is dollars and the
+    attributes are dollars too; otherwise everything is in stars. Polled -
+    balances change from a dozen save paths, and reading the in-memory
+    rewards dict every 30 s is cheaper than wiring a signal into each."""
+
+    _attr_icon = "mdi:piggy-bank-outline"
+
+    def __init__(self, entry_data: dict[str, Any], user_id: str, user_name: str) -> None:
+        self._entry_data = entry_data
+        self._user_id = user_id
+        self._user_name = user_name
+        self._attr_unique_id = f"family_hub_balance_{user_id}"
+        self._attr_name = f"Family Hub {user_name} balance"
+        self._attributes: dict[str, Any] = {}
+
+    async def async_update(self) -> None:
+        store = self._entry_data.get("settings_store")
+        settings = (await store.async_load() or {}) if store else {}
+        rewards = self._entry_data.get("rewards") or {}
+        currency = reward_engine.is_currency_user(settings, self._user_id)
+        scale = (lambda v: round(v / 100, 2)) if currency else (lambda v: v)
+        raw = reward_engine.get_balance(rewards, self._user_id)
+        summary = reward_engine.ledger_summary(rewards, self._user_id, dt_util.now())
+        self._attr_native_value = scale(raw)
+        self._attr_native_unit_of_measurement = "USD" if currency else "stars"
+        self._attr_device_class = SensorDeviceClass.MONETARY if currency else None
+        self._attr_suggested_display_precision = 2 if currency else 0
+        self._attributes = {
+            "user_id": self._user_id,
+            "user_name": self._user_name,
+            "currency": currency,
+            "balance_text": reward_engine.format_amount(settings, self._user_id, raw),
+            **{k: (scale(v) if isinstance(v, int) else v) for k, v in summary.items()},
+        }
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._attributes

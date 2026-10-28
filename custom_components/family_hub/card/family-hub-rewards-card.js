@@ -36,46 +36,66 @@ var __fhT = function (key, fb, vars, mode) {
 };
 // ---- Family Hub per-person currency helper (jordan fork) -----------------
 // Settings' currencyUserIds lists the people whose stars are real money:
-// every star amount of theirs (chore star_value/penalty, balance, history)
-// is a whole number of cents and shows as "$0.50" instead of "⭐ 50".
-// Storage never changes - this only affects display and number inputs.
-// Everyone else, and anything shared (the reward catalog), stays in stars.
-// Each card calls __fhCurSet(settings) after reading Settings. Identical
-// copy in every Family Hub card that shows stars.
+// every star amount of theirs (chore/routine/goal pay, penalties, balance,
+// history) is a whole number of cents and shows as "$0.50" instead of
+// "⭐ 50". Reward catalog items carry their own `currency` flag the same
+// way. Storage never changes - this only affects display and number inputs.
+// Wherever these take a `who`, pass a user id, or true/false for a catalog
+// item's own flag. Each card calls __fhCurSet(settings) after reading
+// Settings. Identical copy in every Family Hub card that shows stars.
 var __fhCur = (window.__familyHubCurrency = window.__familyHubCurrency || { ids: [], symbol: "$" });
 var __fhCurSet = function (settings) {
   var g = window.__familyHubCurrency || __fhCur;
   g.ids = settings && Array.isArray(settings.currencyUserIds) ? settings.currencyUserIds.slice() : [];
   g.symbol = (settings && typeof settings.currencySymbol === "string" && settings.currencySymbol) || "$";
 };
-var __fhCurOn = function (userId) {
-  return !!userId && (window.__familyHubCurrency || __fhCur).ids.indexOf(userId) !== -1;
+var __fhCurOn = function (who) {
+  if (who === true || who === false) return who;
+  return !!who && (window.__familyHubCurrency || __fhCur).ids.indexOf(who) !== -1;
 };
 var __fhCurSym = function () {
   return (window.__familyHubCurrency || __fhCur).symbol;
 };
-// An amount with its unit: "$0.50" for a currency user, "&#11088; 50"
-// otherwise. opts.signed adds a leading +, opts.suffix gives "50&#11088;".
-var __fhPts = function (n, userId, opts) {
+// An amount with its unit: "$0.50" in money, "&#11088; 50" in stars.
+// opts.signed adds a leading +, opts.suffix gives "50&#11088;".
+var __fhPts = function (n, who, opts) {
   opts = opts || {};
   var v = Number(n) || 0;
   var sign = v < 0 ? "&minus;" : opts.signed && v > 0 ? "+" : "";
-  if (__fhCurOn(userId)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
+  if (__fhCurOn(who)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
   return opts.suffix ? sign + Math.abs(v) + "&#11088;" : "&#11088; " + sign + Math.abs(v);
 };
 // Number inputs holding an amount: the value to show, the step attribute,
-// and the stored amount read back (cents for a currency user).
-var __fhPtsIn = function (n, userId) {
+// and the stored amount read back (cents in money).
+var __fhPtsIn = function (n, who) {
   var v = Number(n) || 0;
-  return __fhCurOn(userId) ? (v / 100).toFixed(2) : String(v);
+  return __fhCurOn(who) ? (v / 100).toFixed(2) : String(v);
 };
-var __fhPtsStep = function (userId) {
-  return __fhCurOn(userId) ? 'step="0.01"' : 'step="1"';
+var __fhPtsStep = function (who) {
+  return __fhCurOn(who) ? 'step="0.01"' : 'step="1"';
 };
-var __fhPtsOut = function (s, userId) {
+var __fhPtsOut = function (s, who) {
   var v = parseFloat(s);
   if (!isFinite(v)) return 0;
-  return Math.round(__fhCurOn(userId) ? v * 100 : v);
+  return Math.round(__fhCurOn(who) ? v * 100 : v);
+};
+// Keeps an amount input, and the text of an optional label element, in
+// the units of whoever a person <select> points at. Labels are given as
+// [starText, moneyText]; "%sym%" in moneyText becomes the symbol. The typed
+// number is left alone - only its meaning follows the person.
+var __fhPtsBind = function (box, selectSel, inputSel, labelSel, texts) {
+  var sel = box.querySelector(selectSel);
+  var input = box.querySelector(inputSel);
+  if (!sel || !input) return;
+  var label = labelSel ? box.querySelector(labelSel) : null;
+  var sync = function () {
+    var on = __fhCurOn(sel.value);
+    input.step = on ? "0.01" : "1";
+    if (input.min && Number(input.min) >= 1) input.min = on ? "0.01" : "1";
+    if (label && texts) label.textContent = on ? texts[1].replace("%sym%", __fhCurSym()) : texts[0];
+  };
+  sel.addEventListener("change", sync);
+  sync();
 };
 var __fhUseHass = function (hass) {
   if (hass && typeof hass.localize === "function") (window.__familyHubI18n || __fhI18n).hass = hass;
@@ -2995,7 +3015,7 @@ class FamilyHubRewardsCard extends HTMLElement {
       <div class="tab-pane reward-pane">
       ${!isEdit && !canPrice ? `<div class="m-hint">${this._t("rewards.modal.suggest_hint", "You can suggest a new reward, but only an admin (or someone granted reward-add/reward-override permission) can set its star cost - this'll wait in Suggested Rewards until they price and approve it.")}</div>` : ""}
       <div class="field"><label>${this._t("rewards.modal.title_label", "Title")}</label><input type="text" class="m-title" placeholder="${this._t("rewards.modal.title_placeholder", "Movie night")}"></div>
-      ${canPrice ? `<div class="field"><label>${this._t("rewards.modal.cost_label", "Cost (stars)")}</label><input type="number" class="m-cost" min="0" placeholder="5"></div>` : ""}
+      ${canPrice ? `<div class="field"><label>${this._t("rewards.modal.cost_label", "Cost (stars)")}</label><input type="number" class="m-cost" min="0" placeholder="5"></div><label class="m-currency-opt"><input type="checkbox" class="m-currency"> Priced in dollars (only people on real money can redeem it)</label>` : ""}
       ${
         canPrice
           ? `
@@ -3068,6 +3088,12 @@ class FamilyHubRewardsCard extends HTMLElement {
     const colorInput = box.querySelector(".m-color");
     if (colorInput) colorInput.addEventListener("input", () => { colorInput.dataset.touched = "true"; });
     const redeemModeSelect = box.querySelector(".m-redeem-mode");
+    const currencyBox = box.querySelector(".m-currency");
+    if (currencyBox) {
+      const syncCostUnit = () => { box.querySelector(".m-cost").step = currencyBox.checked ? "0.01" : "1"; };
+      currencyBox.addEventListener("change", syncCostUnit);
+      syncCostUnit();
+    }
     if (redeemModeSelect) {
       redeemModeSelect.addEventListener("change", () => {
         box.querySelector(".m-banked-fields").hidden = redeemModeSelect.value !== "banked";
@@ -3082,7 +3108,8 @@ class FamilyHubRewardsCard extends HTMLElement {
     if (isEdit) {
       box.querySelector(".m-title").value = existingItem.title || "";
       if (canPrice) {
-        box.querySelector(".m-cost").value = existingItem.cost_stars != null ? existingItem.cost_stars : "";
+        box.querySelector(".m-currency").checked = !!existingItem.currency;
+        box.querySelector(".m-cost").value = existingItem.cost_stars != null ? __fhPtsIn(existingItem.cost_stars, !!existingItem.currency) : "";
         box.querySelector(".m-value-note").value = existingItem.value_note || "";
         box.querySelector(".m-timer-minutes").value = existingItem.timer_minutes || "";
         redeemModeSelect.value = existingItem.redeem_mode || "instant";
@@ -3167,7 +3194,7 @@ class FamilyHubRewardsCard extends HTMLElement {
     const g = goal || {};
     const rewardType = g.reward_type || "stars";
     const catalogOptions = this._catalog
-      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${it.cost_stars}&#11088;)</option>`)
+      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${__fhPts(it.cost_stars, !!it.currency, { suffix: true })})</option>`)
       .join("");
     return `
       <label>${this._t("rewards.modal.reward_label", "Reward")}
@@ -3176,13 +3203,14 @@ class FamilyHubRewardsCard extends HTMLElement {
           <option value="catalog_item" ${rewardType === "catalog_item" ? "selected" : ""}>${this._t("rewards.modal.reward_type_catalog_item", "A specific reward from the catalog")}</option>
         </select>
       </label>
-      <label class="g-star-value-field">${this._t("rewards.modal.how_many_stars_label", "How many stars")}<input type="number" class="g-star-value" min="1" value="${g.star_value || 1}"></label>
+      <label class="g-star-value-field"><span class="g-star-value-label">${this._t("rewards.modal.how_many_stars_label", "How many stars")}</span><input type="number" class="g-star-value" min="1" value="${__fhPtsIn(g.star_value || (__fhCurOn(g.assigned_to) ? 100 : 1), g.assigned_to)}"></label>
       <label class="g-reward-item-field">${this._t("rewards.modal.which_reward_label", "Which reward")}<select class="g-reward-item">${catalogOptions}</select></label>
     `;
   }
   _wireGoalRewardFields(box) {
     const typeSelect = box.querySelector(".g-reward-type");
     const starField = box.querySelector(".g-star-value-field");
+    __fhPtsBind(box, ".g-assigned", ".g-star-value", ".g-star-value-label", [this._t("rewards.modal.how_many_stars_label", "How many stars"), "How much (%sym%)"]);
     const itemField = box.querySelector(".g-reward-item-field");
     if (!typeSelect) return;
     const sync = () => {
@@ -3197,7 +3225,7 @@ class FamilyHubRewardsCard extends HTMLElement {
     const rewardType = box.querySelector(".g-reward-type").value;
     payload.reward_type = rewardType;
     if (rewardType === "stars") {
-      payload.star_value = parseInt(box.querySelector(".g-star-value").value, 10) || 0;
+      payload.star_value = __fhPtsOut(box.querySelector(".g-star-value").value, (box.querySelector(".g-assigned") || {}).value);
       payload.reward_item_id = null;
     } else {
       payload.reward_item_id = box.querySelector(".g-reward-item").value || null;
@@ -3262,7 +3290,7 @@ class FamilyHubRewardsCard extends HTMLElement {
         // partial update keyed by which fields are present at all; sending
         // the full form contents makes "what's in the modal" and "what
         // gets saved" the same thing, same as any ordinary edit form.
-        const cost = parseInt(box.querySelector(".m-cost").value, 10) || 0;
+        const cost = __fhPtsOut(box.querySelector(".m-cost").value, !!(box.querySelector(".m-currency") || {}).checked);
         const valueNote = (box.querySelector(".m-value-note").value || "").trim();
         // null on blank, so clearing the box genuinely removes
         // the timer rather than leaving the old length in place.
@@ -3270,7 +3298,7 @@ class FamilyHubRewardsCard extends HTMLElement {
         const redeemMode = box.querySelector(".m-redeem-mode").value || "instant";
         const requiresFulfillment = box.querySelector(".m-requires-fulfillment").checked;
         const payload = {
-          type: "family_hub/rewards/update_catalog_item", item_id: existingItem.id, title, cost_stars: cost, icon, color,
+          type: "family_hub/rewards/update_catalog_item", item_id: existingItem.id, title, cost_stars: cost, icon, color, currency: !!(box.querySelector(".m-currency") || {}).checked,
           value_note: valueNote, redeem_mode: redeemMode, requires_fulfillment: requiresFulfillment,
           timer_minutes: timerMinutes,
           // "who hears this alarm" 3-way tier - see const.py's
@@ -3283,7 +3311,7 @@ class FamilyHubRewardsCard extends HTMLElement {
         }
         await this._hass.connection.sendMessagePromise(payload);
       } else if (canPrice) {
-        const cost = parseInt(box.querySelector(".m-cost").value, 10) || 0;
+        const cost = __fhPtsOut(box.querySelector(".m-cost").value, !!(box.querySelector(".m-currency") || {}).checked);
         const valueNote = (box.querySelector(".m-value-note").value || "").trim();
         // null on blank, so clearing the box genuinely removes
         // the timer rather than leaving the old length in place.
@@ -3291,7 +3319,7 @@ class FamilyHubRewardsCard extends HTMLElement {
         const redeemMode = box.querySelector(".m-redeem-mode").value || "instant";
         const requiresFulfillment = box.querySelector(".m-requires-fulfillment").checked;
         const payload = {
-          type: "family_hub/rewards/add_catalog_item", title, cost_stars: cost, icon, color,
+          type: "family_hub/rewards/add_catalog_item", title, cost_stars: cost, icon, color, currency: !!(box.querySelector(".m-currency") || {}).checked,
           value_note: valueNote, redeem_mode: redeemMode, requires_fulfillment: requiresFulfillment,
           timer_minutes: timerMinutes,
           // same field as the edit form - see its own comment.
@@ -3673,7 +3701,7 @@ class FamilyHubRewardsCard extends HTMLElement {
   _historyEventRow(kind, entry) {
     if (kind === "ledger") {
       const positive = entry.delta > 0;
-      const icons = { chore_approved: __fhCurOn(entry.user_id) ? "&#128176;" : "&#11088;", chore_overdue: "&#9888;", redeemed: "&#127873;", redemption_reversed: "&#8634;", manual_adjustment: "&#9998;" };
+      const icons = { chore_approved: __fhCurOn(entry.user_id) ? "&#128176;" : "&#11088;", chore_overdue: "&#9888;", redeemed: "&#127873;", redemption_reversed: "&#8634;", manual_adjustment: "&#9998;", payout: "&#128181;" };
       return {
         at: entry.at,
         icon: icons[entry.source] || (positive ? "&#11088;" : "&#9888;"),
@@ -3690,7 +3718,7 @@ class FamilyHubRewardsCard extends HTMLElement {
         at: entry.redeemed_at,
         icon: "&#127873;",
         label: `${label}${pending}`,
-        detail: entry.bank_delta ? `+${entry.bank_delta} ${entry.unit_label || ""} (&minus;${entry.cost_stars} &#11088;)` : `&minus;${entry.cost_stars} &#11088;`,
+        detail: entry.bank_delta ? `+${entry.bank_delta} ${entry.unit_label || ""} (${__fhPts(-entry.cost_stars, entry.user_id, { suffix: true })})` : __fhPts(-entry.cost_stars, entry.user_id, { suffix: true }),
       };
     }
     // "usage"
@@ -3821,7 +3849,7 @@ class FamilyHubRewardsCard extends HTMLElement {
       <div class="catalog-item" data-id="${item.id}"${this._catalogAccentStyle(item)}>
         <div class="catalog-icon">${item.icon || "&#127873;"}</div>
         <div class="catalog-title">${this._esc(item.title)}</div>
-        <div class="catalog-cost">&#11088; ${item.cost_stars}</div>
+        <div class="catalog-cost">${__fhPts(item.cost_stars, !!item.currency)}</div>
         ${valueNote}
         ${modeBadge}
         ${timerBadge}
@@ -3850,7 +3878,7 @@ class FamilyHubRewardsCard extends HTMLElement {
       <div class="history-row">
         <span>${this._esc(this._userName(r.user_id))}</span>
         <span>${this._esc(r.title)}</span>
-        <span>&#11088; ${r.cost_stars}</span>
+        <span>${__fhPts(r.cost_stars, r.user_id)}</span>
         <span class="history-date">${r.redeemed_at ? this._fmtDate(new Date(r.redeemed_at)) : ""}</span>
         ${actions}
       </div>
@@ -3892,7 +3920,7 @@ class FamilyHubRewardsCard extends HTMLElement {
   // _canAddRewardsDirectly gets the Mark Done button.
   _pendingRowHtml(kind, entry) {
     const canResolve = this._canAddRewardsDirectly();
-    const amountText = kind === "redemption" ? `&#11088; ${entry.cost_stars}` : `${entry.amount} ${this._esc(entry.unit_label || "")}`;
+    const amountText = kind === "redemption" ? `${__fhPts(entry.cost_stars, entry.user_id)}` : `${entry.amount} ${this._esc(entry.unit_label || "")}`;
     const when = kind === "redemption" ? entry.redeemed_at : entry.used_at;
     const action = canResolve
       ? `<span class="suggestion-actions"><button type="button" class="pending-mark-done-btn" data-kind="${kind}" data-id="${entry.id}">${this._t("rewards.pending.mark_done_btn", "Mark done")}</button></span>`
@@ -3942,7 +3970,7 @@ class FamilyHubRewardsCard extends HTMLElement {
       : `<div class="empty">${this._t("rewards.empty.no_members", "No one's been added to Family Hub yet - add people under Settings on the calendar dashboard.")}</div>`;
 
     this._root.querySelector(".catalog").innerHTML = this._catalog.length
-      ? this._catalog.map((it) => this._catalogItemHtml(it)).join("")
+      ? this._catalog.filter((it) => this._hasPermission("can_override_rewards") || !!it.currency === __fhCurOn(this._myUserId())).map((it) => this._catalogItemHtml(it)).join("")
       : `<div class="empty">${this._t("rewards.empty.no_catalog", "No rewards in the catalog yet.")}</div>`;
 
     // an embedded Goals section, only ever shown when the
@@ -4047,6 +4075,8 @@ class FamilyHubRewardsCard extends HTMLElement {
          button, so it doesn't compete with Save/Cancel or the Add/Subtract
          toggle for attention - it's a secondary way out of this modal, not
          part of the add/subtract task the modal is otherwise entirely for. */
+      .m-currency-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: -4px 0 8px; }
+      .m-currency-opt input { width: auto; margin: 0; }
       .manage-stars-currency-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0 8px; }
       .manage-stars-currency-opt input { width: auto; margin: 0; }
       .manage-stars-all-btn { margin: 0 0 8px; }

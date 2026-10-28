@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from homeassistant.util import dt as dt_util
@@ -135,6 +136,8 @@ LEDGER_SOURCE_MANUAL_ADJUSTMENT = "manual_adjustment"
 # needed" answer applies here too, just spending them ON someone else
 # instead of on a catalog item).
 LEDGER_SOURCE_GIFT_SENT = "gift_sent"
+# jordan fork: money actually handed over for an IOU balance - see pay_out.
+LEDGER_SOURCE_PAYOUT = "payout"
 LEDGER_SOURCE_GIFT_RECEIVED = "gift_received"
 
 
@@ -152,6 +155,100 @@ def format_amount(settings: Optional[dict[str, Any]], user_id: Optional[str], am
         symbol = (settings or {}).get(SETTINGS_KEY_CURRENCY_SYMBOL) or "$"
         return f"{'-' if amount < 0 else ''}{symbol}{abs(amount) / 100:.2f}"
     return f"{amount} star{'s' if amount != 1 else ''}"
+
+
+def carry_forward_currency_settings(new_settings: dict[str, Any], existing: dict[str, Any]) -> None:
+    """set_settings is a full replace, and only the Rewards card knows the
+    currency keys - copy them over from `existing` when a save from any
+    other card leaves them out. A save that does include them wins, so
+    turning someone off (an empty list) still works."""
+    for key in (SETTINGS_KEY_CURRENCY_USER_IDS, SETTINGS_KEY_CURRENCY_SYMBOL):
+        if key not in new_settings and key in existing:
+            new_settings[key] = existing[key]
+
+
+def currency_mismatch(settings: Optional[dict[str, Any]], user_id: Optional[str], item: dict[str, Any]) -> bool:
+    """A money-priced reward can only be redeemed by someone on real money,
+    and a star reward only by someone on stars - their balances are in
+    different units."""
+    return bool(item.get("currency")) != is_currency_user(settings, user_id)
+
+
+_EARNED_SOURCES = (
+    LEDGER_SOURCE_CHORE_APPROVED,
+    LEDGER_SOURCE_GOAL_ACHIEVED,
+    LEDGER_SOURCE_ROUTINE_APPROVED,
+)
+_PAID_SOURCES = (LEDGER_SOURCE_PAYOUT, LEDGER_SOURCE_MANUAL_ADJUSTMENT)
+
+
+def ledger_summary(rewards: dict[str, Any], user_id: str, now: datetime) -> dict[str, Any]:
+    """Earned/paid totals for user_id's balance sensor and statements, in
+    stored units (cents for a currency user). `now` must be timezone-aware
+    and local - weeks start Monday, months on the 1st, in its timezone.
+    "Earned" is chore/goal/routine pay plus manual bonuses; "paid" is
+    payouts plus manual deductions (Manage stars' Subtract, which is how a
+    payout is recorded from the card); overdue penalties are separate."""
+    tz = now.tzinfo
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=day_start.weekday())
+    month_start = day_start.replace(day=1)
+    last_month_start = (month_start - timedelta(days=1)).replace(day=1)
+    out = {
+        "earned_this_week": 0,
+        "earned_this_month": 0,
+        "earned_last_month": 0,
+        "paid_this_month": 0,
+        "paid_last_month": 0,
+        "penalties_this_month": 0,
+        "last_payout_at": None,
+        "last_payout_amount": 0,
+    }
+    last_payout = None
+    for entry in rewards.get("ledger") or []:
+        if entry.get("user_id") != user_id:
+            continue
+        try:
+            at = datetime.fromisoformat(entry.get("at")).astimezone(tz)
+        except (TypeError, ValueError):
+            continue
+        delta = int(entry.get("delta") or 0)
+        source = entry.get("source")
+        earned = delta > 0 and (source in _EARNED_SOURCES or source == LEDGER_SOURCE_MANUAL_ADJUSTMENT)
+        paid = delta < 0 and source in _PAID_SOURCES
+        if earned:
+            if at >= week_start:
+                out["earned_this_week"] += delta
+            if at >= month_start:
+                out["earned_this_month"] += delta
+            elif at >= last_month_start:
+                out["earned_last_month"] += delta
+        elif paid:
+            if at >= month_start:
+                out["paid_this_month"] -= delta
+            elif at >= last_month_start:
+                out["paid_last_month"] -= delta
+            if last_payout is None or at > last_payout[0]:
+                last_payout = (at, -delta)
+        elif delta < 0 and source == LEDGER_SOURCE_CHORE_OVERDUE and at >= month_start:
+            out["penalties_this_month"] -= delta
+    if last_payout:
+        out["last_payout_at"] = last_payout[0].isoformat()
+        out["last_payout_amount"] = last_payout[1]
+    return out
+
+
+def pay_out(rewards: dict[str, Any], user_id: str, amount: Optional[int] = None, reason: str = "") -> dict[str, Any]:
+    """Records money handed over against user_id's balance - the whole
+    balance when `amount` is None. Never pays more than is owed."""
+    balance = get_balance(rewards, user_id)
+    amount = balance if amount is None else int(amount)
+    if amount <= 0:
+        raise RewardError("invalid_amount", "Nothing to pay out.")
+    if amount > balance:
+        raise RewardError("insufficient_balance", f"Only {balance} owed - can't pay out {amount}.")
+    new_balance = add_stars(rewards, user_id, -amount, reason=reason or "Paid out", source=LEDGER_SOURCE_PAYOUT)
+    return {"amount": amount, "balance": new_balance}
 
 
 def add_stars(
@@ -294,6 +391,7 @@ def add_catalog_item(
     stack_unit_label: str = "",
     timer_minutes: Any = None,
     alarm_audience: Any = None,
+    currency: bool = False,
 ) -> dict[str, Any]:
     """v128+ adds four optional fields on top of the original title/cost/
     icon/color - see const.py's REWARD_REDEEM_MODES docstring for the full
@@ -331,6 +429,10 @@ def add_catalog_item(
         "value_note": str(value_note or "").strip(),
         "stack_unit_amount": stack_unit_amount,
         "stack_unit_label": str(stack_unit_label or "").strip(),
+        # jordan fork: True prices this reward in cents for people on real
+        # money (see is_currency_user); only they can redeem it, and only
+        # star items are open to everyone else.
+        "currency": bool(currency),
         # optional countdown started when this reward is used -
         # "2 hours of gaming." None (every pre-v1.110.0 reward) means no
         # timer, and Use behaves exactly as it always has. Deliberately
@@ -394,6 +496,8 @@ def update_catalog_item(rewards: dict[str, Any], item_id: str, **fields: Any) ->
         item["stack_unit_amount"] = stack_unit_amount
     if "stack_unit_label" in fields:
         item["stack_unit_label"] = str(fields["stack_unit_label"] or "").strip()
+    if "currency" in fields:
+        item["currency"] = bool(fields["currency"])
     return item
 
 

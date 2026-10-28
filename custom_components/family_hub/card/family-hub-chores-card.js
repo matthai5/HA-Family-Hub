@@ -36,46 +36,66 @@ var __fhT = function (key, fb, vars, mode) {
 };
 // ---- Family Hub per-person currency helper (jordan fork) -----------------
 // Settings' currencyUserIds lists the people whose stars are real money:
-// every star amount of theirs (chore star_value/penalty, balance, history)
-// is a whole number of cents and shows as "$0.50" instead of "⭐ 50".
-// Storage never changes - this only affects display and number inputs.
-// Everyone else, and anything shared (the reward catalog), stays in stars.
-// Each card calls __fhCurSet(settings) after reading Settings. Identical
-// copy in every Family Hub card that shows stars.
+// every star amount of theirs (chore/routine/goal pay, penalties, balance,
+// history) is a whole number of cents and shows as "$0.50" instead of
+// "⭐ 50". Reward catalog items carry their own `currency` flag the same
+// way. Storage never changes - this only affects display and number inputs.
+// Wherever these take a `who`, pass a user id, or true/false for a catalog
+// item's own flag. Each card calls __fhCurSet(settings) after reading
+// Settings. Identical copy in every Family Hub card that shows stars.
 var __fhCur = (window.__familyHubCurrency = window.__familyHubCurrency || { ids: [], symbol: "$" });
 var __fhCurSet = function (settings) {
   var g = window.__familyHubCurrency || __fhCur;
   g.ids = settings && Array.isArray(settings.currencyUserIds) ? settings.currencyUserIds.slice() : [];
   g.symbol = (settings && typeof settings.currencySymbol === "string" && settings.currencySymbol) || "$";
 };
-var __fhCurOn = function (userId) {
-  return !!userId && (window.__familyHubCurrency || __fhCur).ids.indexOf(userId) !== -1;
+var __fhCurOn = function (who) {
+  if (who === true || who === false) return who;
+  return !!who && (window.__familyHubCurrency || __fhCur).ids.indexOf(who) !== -1;
 };
 var __fhCurSym = function () {
   return (window.__familyHubCurrency || __fhCur).symbol;
 };
-// An amount with its unit: "$0.50" for a currency user, "&#11088; 50"
-// otherwise. opts.signed adds a leading +, opts.suffix gives "50&#11088;".
-var __fhPts = function (n, userId, opts) {
+// An amount with its unit: "$0.50" in money, "&#11088; 50" in stars.
+// opts.signed adds a leading +, opts.suffix gives "50&#11088;".
+var __fhPts = function (n, who, opts) {
   opts = opts || {};
   var v = Number(n) || 0;
   var sign = v < 0 ? "&minus;" : opts.signed && v > 0 ? "+" : "";
-  if (__fhCurOn(userId)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
+  if (__fhCurOn(who)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
   return opts.suffix ? sign + Math.abs(v) + "&#11088;" : "&#11088; " + sign + Math.abs(v);
 };
 // Number inputs holding an amount: the value to show, the step attribute,
-// and the stored amount read back (cents for a currency user).
-var __fhPtsIn = function (n, userId) {
+// and the stored amount read back (cents in money).
+var __fhPtsIn = function (n, who) {
   var v = Number(n) || 0;
-  return __fhCurOn(userId) ? (v / 100).toFixed(2) : String(v);
+  return __fhCurOn(who) ? (v / 100).toFixed(2) : String(v);
 };
-var __fhPtsStep = function (userId) {
-  return __fhCurOn(userId) ? 'step="0.01"' : 'step="1"';
+var __fhPtsStep = function (who) {
+  return __fhCurOn(who) ? 'step="0.01"' : 'step="1"';
 };
-var __fhPtsOut = function (s, userId) {
+var __fhPtsOut = function (s, who) {
   var v = parseFloat(s);
   if (!isFinite(v)) return 0;
-  return Math.round(__fhCurOn(userId) ? v * 100 : v);
+  return Math.round(__fhCurOn(who) ? v * 100 : v);
+};
+// Keeps an amount input, and the text of an optional label element, in
+// the units of whoever a person <select> points at. Labels are given as
+// [starText, moneyText]; "%sym%" in moneyText becomes the symbol. The typed
+// number is left alone - only its meaning follows the person.
+var __fhPtsBind = function (box, selectSel, inputSel, labelSel, texts) {
+  var sel = box.querySelector(selectSel);
+  var input = box.querySelector(inputSel);
+  if (!sel || !input) return;
+  var label = labelSel ? box.querySelector(labelSel) : null;
+  var sync = function () {
+    var on = __fhCurOn(sel.value);
+    input.step = on ? "0.01" : "1";
+    if (input.min && Number(input.min) >= 1) input.min = on ? "0.01" : "1";
+    if (label && texts) label.textContent = on ? texts[1].replace("%sym%", __fhCurSym()) : texts[0];
+  };
+  sel.addEventListener("change", sync);
+  sync();
 };
 var __fhUseHass = function (hass) {
   if (hass && typeof hass.localize === "function") (window.__familyHubI18n || __fhI18n).hass = hass;
@@ -3458,7 +3478,7 @@ class FamilyHubChoresCard extends HTMLElement {
       <div class="rewards-catalog-item" data-id="${item.id}"${this._rewardsCatalogAccentStyle(item)}>
         <span class="rewards-catalog-icon">${item.icon || "&#127873;"}</span>
         <span class="rewards-catalog-item-title">${this._esc(item.title)}</span>
-        <span class="rewards-catalog-cost">&#11088; ${item.cost_stars}</span>
+        <span class="rewards-catalog-cost">${__fhPts(item.cost_stars, !!item.currency)}</span>
         <button type="button" class="rewards-claim-btn" data-id="${item.id}" ${affordable ? "" : "disabled"}>${this._t("chores.claim", "Claim")}</button>
         <div class="rewards-claim-status"></div>
       </div>
@@ -3470,7 +3490,7 @@ class FamilyHubChoresCard extends HTMLElement {
       ? memberUsers.map((u) => this._rewardsBalanceRowHtml(u)).join("")
       : `<div class="chore-col-empty">${this._t("chores.no_one_added_yet", "No one's been added to Family Hub yet")}</div>`;
     const catalog = this._catalog.length
-      ? this._catalog.map((it) => this._rewardsCatalogItemHtml(it)).join("")
+      ? this._catalog.filter((it) => this._isAdmin() || !!it.currency === __fhCurOn(this._myUserId())).map((it) => this._rewardsCatalogItemHtml(it)).join("")
       : `<div class="chore-col-empty">${this._t("chores.no_rewards_yet", "No rewards in the catalog yet")}</div>`;
     return `
       <div class="chore-column rewards-column">
@@ -3609,7 +3629,7 @@ class FamilyHubChoresCard extends HTMLElement {
     // once it's actually pending (checked, star_value set, and
     // no_approval_required is false) - see toggle_item's own docstring.
     const starsBadge = item.star_value
-      ? `<span class="routine-item-stars">&#11088; ${item.star_value}${item.pending_approval ? ` - ${this._t("chores.awaiting_approval", "awaiting approval")}` : ""}</span>`
+      ? `<span class="routine-item-stars">${__fhPts(item.star_value, item.user_id)}${item.pending_approval ? ` - ${this._t("chores.awaiting_approval", "awaiting approval")}` : ""}</span>`
       : "";
     const meta = dueBadge || daysBadge || starsBadge ? `<div class="routine-item-meta">${dueBadge}${daysBadge}${starsBadge}</div>` : "";
     // Editing/removing an item is an admin/assign-permission action
@@ -4862,7 +4882,7 @@ class FamilyHubChoresCard extends HTMLElement {
             const box2 = this._root.querySelector(".create-modal .modal-box");
             if (box2 && box2.dataset.activeTab === "goal") {
               const field = box2.querySelector(".g-reward-item-field");
-              if (field) field.querySelector("select").innerHTML = this._catalog.map((it) => `<option value="${it.id}">${this._esc(it.title)} (${it.cost_stars}&#11088;)</option>`).join("");
+              if (field) field.querySelector("select").innerHTML = this._catalog.map((it) => `<option value="${it.id}">${this._esc(it.title)} (${__fhPts(it.cost_stars, !!it.currency, { suffix: true })})</option>`).join("");
             }
           });
         }
@@ -5007,12 +5027,12 @@ class FamilyHubChoresCard extends HTMLElement {
       ).join("");
       const automate = item.auto_complete_trigger || {};
       return `
-        <div class="rm-item-row" data-id="${item.id}">
+        <div class="rm-item-row" data-id="${item.id}" data-user="${item.user_id}">
           <div class="rm-item-edit-form">
             <input type="text" class="rm-edit-title" value="${this._escAttr(item.title)}">
             <input type="time" class="rm-edit-time" value="${item.due_time || ""}">
             <div class="rm-days" data-role="edit">${dayToggles}</div>
-            <input type="number" class="rm-edit-stars" min="0" placeholder="${this._t("chores.rm_stars_placeholder", "Stars for completing this (optional)")}" value="${item.star_value || ""}">
+            <input type="number" class="rm-edit-stars" min="0" ${__fhPtsStep(item.user_id)} placeholder="${__fhCurOn(item.user_id) ? __fhEsc(`Pay for completing this (${__fhCurSym()}, optional)`) : this._t("chores.rm_stars_placeholder", "Stars for completing this (optional)")}" value="${item.star_value ? __fhPtsIn(item.star_value, item.user_id) : ""}">
             ${this._approvalToggleHtml("rm-edit-no-approval", !!item.no_approval_required, false, "")}
             <!-- same accordion treatment as the add-form's own
                  copy just above (see its own comment) - this one's re-
@@ -5045,7 +5065,7 @@ class FamilyHubChoresCard extends HTMLElement {
     }
     const dueBadge = item.due_time ? `<span>${this._esc(this._formatDueTime(item.due_time))}</span>` : "";
     const daysBadge = `<span>${item.days_of_week && item.days_of_week.length ? item.days_of_week.map((d) => this._weekdayLabel(d)).join(" ") : this._t("chores.every_day", "Every day")}</span>`;
-    const starsBadge = item.star_value ? `<span>&#11088; ${item.star_value}${item.no_approval_required ? "" : ` (${this._t("chores.needs_approval", "needs approval")})`}</span>` : "";
+    const starsBadge = item.star_value ? `<span>${__fhPts(item.star_value, item.user_id)}${item.no_approval_required ? "" : ` (${this._t("chores.needs_approval", "needs approval")})`}</span>` : "";
     const automateBadge = item.auto_complete_trigger ? `<span title="${this._t("chores.auto_completes_from_x", `Auto-completes from ${this._esc(item.auto_complete_trigger.entity_id || "")}`, { x: this._esc(item.auto_complete_trigger.entity_id || "") })}">&#9881;&#65039; ${this._t("chores.auto", "Auto")}</span>` : "";
     // - draggable, same gate as
     // the Edit/Remove buttons right below (reordering is exactly as
@@ -5079,6 +5099,12 @@ class FamilyHubChoresCard extends HTMLElement {
   }
   _renderRoutineManagePane(box) {
     const personSel = box.querySelector(".rm-person");
+    const addStars = box.querySelector(".rm-add-stars");
+    if (personSel && addStars) {
+      const on = __fhCurOn(personSel.value);
+      addStars.step = on ? "0.01" : "1";
+      addStars.placeholder = on ? `Pay for completing this (${__fhCurSym()}, optional)` : this._t("chores.rm_stars_placeholder", "Stars for completing this (optional)");
+    }
     const categorySel = box.querySelector(".rm-category");
     if (!personSel || !categorySel || !personSel.value) return;
     const items = this._routineItemsForManage(personSel.value, categorySel.value);
@@ -5281,7 +5307,7 @@ class FamilyHubChoresCard extends HTMLElement {
     }
     const dueTime = box.querySelector(".rm-add-time").value || null;
     const daysOfWeek = this._readRoutineDaysFromContainer(box.querySelector('.rm-days[data-role="add"]'));
-    const starValue = parseInt(box.querySelector(".rm-add-stars").value, 10) || 0;
+    const starValue = __fhPtsOut(box.querySelector(".rm-add-stars").value, personId);
     const noApprovalRequired = box.querySelector(".rm-add-no-approval").checked;
     const automateEntity = box.querySelector(".rm-add-automate-entity").value.trim();
     const autoCompleteTrigger = automateEntity
@@ -5350,7 +5376,7 @@ class FamilyHubChoresCard extends HTMLElement {
     }
     const dueTime = row.querySelector(".rm-edit-time").value || null;
     const daysOfWeek = this._readRoutineDaysFromContainer(row.querySelector('.rm-days[data-role="edit"]'));
-    const starValue = parseInt(row.querySelector(".rm-edit-stars").value, 10) || 0;
+    const starValue = __fhPtsOut(row.querySelector(".rm-edit-stars").value, row.dataset.user);
     const noApprovalRequired = row.querySelector(".rm-edit-no-approval").checked;
     const automateEntity = row.querySelector(".rm-edit-automate-entity").value.trim();
     const autoCompleteTrigger = automateEntity
@@ -5400,7 +5426,7 @@ class FamilyHubChoresCard extends HTMLElement {
     const g = goal || {};
     const rewardType = g.reward_type || "stars";
     const catalogOptions = this._catalog
-      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${it.cost_stars}&#11088;)</option>`)
+      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${__fhPts(it.cost_stars, !!it.currency, { suffix: true })})</option>`)
       .join("");
     return `
       <label>${__fhT("text.reward", "Reward", null, "h")}
@@ -5409,13 +5435,14 @@ class FamilyHubChoresCard extends HTMLElement {
           <option data-fh-t="text.a_specific_reward_from_the_catalog" value="catalog_item" ${rewardType === "catalog_item" ? "selected" : ""}>${__fhT("text.a_specific_reward_from_the_catalog", "A specific reward from the catalog", null, "h")}</option>
         </select>
       </label>
-      <label class="g-star-value-field">${__fhT("text.how_many_stars", "How many stars", null, "h")}<input type="number" class="g-star-value" min="1" value="${g.star_value || 1}"></label>
+      <label class="g-star-value-field"><span class="g-star-value-label">${__fhT("text.how_many_stars", "How many stars", null, "h")}</span><input type="number" class="g-star-value" min="1" value="${__fhPtsIn(g.star_value || (__fhCurOn(g.assigned_to) ? 100 : 1), g.assigned_to)}"></label>
       <label class="g-reward-item-field">${__fhT("text.which_reward", "Which reward", null, "h")}<select class="g-reward-item">${catalogOptions}</select></label>
     `;
   }
   _wireGoalRewardFields(box) {
     const typeSelect = box.querySelector(".g-reward-type");
     const starField = box.querySelector(".g-star-value-field");
+    __fhPtsBind(box, ".g-assigned", ".g-star-value", ".g-star-value-label", [__fhT("text.how_many_stars", "How many stars"), "How much (%sym%)"]);
     const itemField = box.querySelector(".g-reward-item-field");
     if (!typeSelect) return;
     const sync = () => {
@@ -5430,7 +5457,7 @@ class FamilyHubChoresCard extends HTMLElement {
     const rewardType = box.querySelector(".g-reward-type").value;
     payload.reward_type = rewardType;
     if (rewardType === "stars") {
-      payload.star_value = parseInt(box.querySelector(".g-star-value").value, 10) || 0;
+      payload.star_value = __fhPtsOut(box.querySelector(".g-star-value").value, (box.querySelector(".g-assigned") || {}).value);
       payload.reward_item_id = null;
     } else {
       payload.reward_item_id = box.querySelector(".g-reward-item").value || null;

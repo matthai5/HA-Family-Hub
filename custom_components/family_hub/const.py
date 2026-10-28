@@ -1990,6 +1990,9 @@ SERVICE_COMPLETE_CHORE = "complete_chore"
 SERVICE_APPROVE_CHORE = "approve_chore"
 SERVICE_REJECT_CHORE = "reject_chore"
 SERVICE_NUDGE_USER = "nudge_user"
+# jordan fork: balance services for automations (see services.yaml).
+SERVICE_ADJUST_BALANCE = "adjust_balance"
+SERVICE_PAY_OUT = "pay_out"
 
 # Permission keys a household can grant a non-admin HA user in the
 # Permissions tab (Settings > Permissions on family-hub-chores-card, admin

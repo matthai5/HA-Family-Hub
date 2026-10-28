@@ -1487,6 +1487,7 @@ async def ws_get_rewards_state(hass: HomeAssistant, connection: websocket_api.Ac
         # see const.py's REWARD_KEY_ALARM_AUDIENCE/
         # TIMER_ALARM_AUDIENCES.
         vol.Optional("alarm_audience"): str,
+        vol.Optional("currency"): bool,
         vol.Optional("elevation_token"): str,
     }
 )
@@ -1536,6 +1537,7 @@ async def ws_add_catalog_item(hass: HomeAssistant, connection: websocket_api.Act
             stack_unit_label=msg.get("stack_unit_label", ""),
             timer_minutes=msg.get("timer_minutes"),
             alarm_audience=msg.get("alarm_audience"),
+            currency=msg.get("currency", False),
         )
     except reward_engine.RewardError as err:
         connection.send_error(msg["id"], err.code, str(err))
@@ -1559,6 +1561,7 @@ async def ws_add_catalog_item(hass: HomeAssistant, connection: websocket_api.Act
         vol.Optional("stack_unit_label"): str,
         vol.Optional("timer_minutes"): vol.Any(int, None),
         vol.Optional("alarm_audience"): str,
+        vol.Optional("currency"): bool,
     }
 )
 @websocket_api.async_response
@@ -1626,6 +1629,12 @@ async def ws_redeem_reward(hass: HomeAssistant, connection: websocket_api.Active
     if target_user_id != actor_id and not _has_permission_ctx(entry_data, actor_id, is_admin, PERMISSION_REWARD_OVERRIDE):
         connection.send_error(msg["id"], "forbidden", "Only an admin (or someone granted reward-override permission) can redeem on someone else's behalf.")
         return
+    item = next((it for it in entry_data["rewards"].get("catalog") or [] if it.get("id") == msg["item_id"]), None)
+    if item is not None:
+        settings = await entry_data["settings_store"].async_load() or {} if entry_data.get("settings_store") else {}
+        if reward_engine.currency_mismatch(settings, target_user_id, item):
+            connection.send_error(msg["id"], "unit_mismatch", "That reward is priced for someone on real money." if item.get("currency") else "That reward is priced in stars.")
+            return
     try:
         redemption = reward_engine.redeem_item(entry_data["rewards"], target_user_id, msg["item_id"])
     except reward_engine.RewardError as err:
@@ -2761,7 +2770,7 @@ async def _notify_goal_approved(hass: HomeAssistant, entry_data: dict[str, Any],
     if goal.get("reward_type") == "stars":
         stars = int(goal.get("star_value") or 0)
         if stars:
-            reward_note = f" (+{stars} star{'s' if stars != 1 else ''})"
+            reward_note = f" (+{reward_engine.format_amount(settings, assignee, stars)})"
     await _send_instant_notification(
         hass, notify_targets, "Family Hub goal achieved",
         f"\"{goal.get('title')}\" was approved{reward_note}!",
@@ -3517,6 +3526,12 @@ async def ws_start_reward_timer(hass: HomeAssistant, connection: websocket_api.A
             f"minute{'s' if left != 1 else ''} left. Cancel it first if you want to start this one.",
         )
         return
+    item = next((it for it in entry_data["rewards"].get("catalog") or [] if it.get("id") == msg["item_id"]), None)
+    if item is not None:
+        settings = await entry_data["settings_store"].async_load() or {} if entry_data.get("settings_store") else {}
+        if reward_engine.currency_mismatch(settings, target_user_id, item):
+            connection.send_error(msg["id"], "unit_mismatch", "That reward is priced for someone on real money." if item.get("currency") else "That reward is priced in stars.")
+            return
     try:
         redemption = reward_engine.redeem_item(entry_data["rewards"], target_user_id, msg["item_id"])
     except reward_engine.RewardError as err:

@@ -72,6 +72,69 @@ var __fhT = function (key, fb, vars, mode) {
   }
   return str;
 };
+// ---- Family Hub per-person currency helper (jordan fork) -----------------
+// Settings' currencyUserIds lists the people whose stars are real money:
+// every star amount of theirs (chore/routine/goal pay, penalties, balance,
+// history) is a whole number of cents and shows as "$0.50" instead of
+// "⭐ 50". Reward catalog items carry their own `currency` flag the same
+// way. Storage never changes - this only affects display and number inputs.
+// Wherever these take a `who`, pass a user id, or true/false for a catalog
+// item's own flag. Each card calls __fhCurSet(settings) after reading
+// Settings. Identical copy in every Family Hub card that shows stars.
+var __fhCur = (window.__familyHubCurrency = window.__familyHubCurrency || { ids: [], symbol: "$" });
+var __fhCurSet = function (settings) {
+  var g = window.__familyHubCurrency || __fhCur;
+  g.ids = settings && Array.isArray(settings.currencyUserIds) ? settings.currencyUserIds.slice() : [];
+  g.symbol = (settings && typeof settings.currencySymbol === "string" && settings.currencySymbol) || "$";
+};
+var __fhCurOn = function (who) {
+  if (who === true || who === false) return who;
+  return !!who && (window.__familyHubCurrency || __fhCur).ids.indexOf(who) !== -1;
+};
+var __fhCurSym = function () {
+  return (window.__familyHubCurrency || __fhCur).symbol;
+};
+// An amount with its unit: "$0.50" in money, "&#11088; 50" in stars.
+// opts.signed adds a leading +, opts.suffix gives "50&#11088;".
+var __fhPts = function (n, who, opts) {
+  opts = opts || {};
+  var v = Number(n) || 0;
+  var sign = v < 0 ? "&minus;" : opts.signed && v > 0 ? "+" : "";
+  if (__fhCurOn(who)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
+  return opts.suffix ? sign + Math.abs(v) + "&#11088;" : "&#11088; " + sign + Math.abs(v);
+};
+// Number inputs holding an amount: the value to show, the step attribute,
+// and the stored amount read back (cents in money).
+var __fhPtsIn = function (n, who) {
+  var v = Number(n) || 0;
+  return __fhCurOn(who) ? (v / 100).toFixed(2) : String(v);
+};
+var __fhPtsStep = function (who) {
+  return __fhCurOn(who) ? 'step="0.01"' : 'step="1"';
+};
+var __fhPtsOut = function (s, who) {
+  var v = parseFloat(s);
+  if (!isFinite(v)) return 0;
+  return Math.round(__fhCurOn(who) ? v * 100 : v);
+};
+// Keeps an amount input, and the text of an optional label element, in
+// the units of whoever a person <select> points at. Labels are given as
+// [starText, moneyText]; "%sym%" in moneyText becomes the symbol. The typed
+// number is left alone - only its meaning follows the person.
+var __fhPtsBind = function (box, selectSel, inputSel, labelSel, texts) {
+  var sel = box.querySelector(selectSel);
+  var input = box.querySelector(inputSel);
+  if (!sel || !input) return;
+  var label = labelSel ? box.querySelector(labelSel) : null;
+  var sync = function () {
+    var on = __fhCurOn(sel.value);
+    input.step = on ? "0.01" : "1";
+    if (input.min && Number(input.min) >= 1) input.min = on ? "0.01" : "1";
+    if (label && texts) label.textContent = on ? texts[1].replace("%sym%", __fhCurSym()) : texts[0];
+  };
+  sel.addEventListener("change", sync);
+  sync();
+};
 var __fhUseHass = function (hass) {
   if (hass && typeof hass.localize === "function") (window.__familyHubI18n || __fhI18n).hass = hass;
 };
@@ -1033,6 +1096,7 @@ class FamilyHubGoalsCard extends HTMLElement {
     } catch (e) {
       if (!this._settingsCache) this._settingsCache = this._defaultSettings();
     }
+    __fhCurSet(this._settingsCache);
     this._applyThemeVars();
   }
   async _fetchGlobalThemes() {
@@ -1482,7 +1546,7 @@ class FamilyHubGoalsCard extends HTMLElement {
     const g = goal || {};
     const rewardType = g.reward_type || GOAL_REWARD_TYPE_STARS;
     const catalogOptions = this._catalog
-      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${it.cost_stars}&#11088;)</option>`)
+      .map((it) => `<option value="${it.id}" ${g.reward_item_id === it.id ? "selected" : ""}>${this._esc(it.title)} (${__fhPts(it.cost_stars, !!it.currency, { suffix: true })})</option>`)
       .join("");
     return `
       <label>${this._t("goals.reward_label", "Reward")}
@@ -1491,13 +1555,14 @@ class FamilyHubGoalsCard extends HTMLElement {
           <option value="${GOAL_REWARD_TYPE_CATALOG_ITEM}" ${rewardType === GOAL_REWARD_TYPE_CATALOG_ITEM ? "selected" : ""}>${this._t("goals.reward_type_catalog_item", "A specific reward from the catalog")}</option>
         </select>
       </label>
-      <label class="f-star-value-field">${this._t("goals.how_many_stars_label", "How many stars")}<input type="number" class="f-star-value" min="1" value="${g.star_value || 1}"></label>
+      <label class="f-star-value-field"><span class="f-star-value-label">${this._t("goals.how_many_stars_label", "How many stars")}</span><input type="number" class="f-star-value" min="1" value="${__fhPtsIn(g.star_value || (__fhCurOn(g.assigned_to) ? 100 : 1), g.assigned_to)}"></label>
       <label class="f-reward-item-field">${this._t("goals.which_reward_label", "Which reward")}<select class="f-reward-item">${catalogOptions}</select></label>
     `;
   }
   _wireRewardFields(box) {
     const typeSelect = box.querySelector(".f-reward-type");
     const starField = box.querySelector(".f-star-value-field");
+    __fhPtsBind(box, ".f-assigned", ".f-star-value", ".f-star-value-label", [this._t("goals.how_many_stars_label", "How many stars"), "How much (%sym%)"]);
     const itemField = box.querySelector(".f-reward-item-field");
     const sync = () => {
       const isStars = typeSelect.value === GOAL_REWARD_TYPE_STARS;
@@ -1511,7 +1576,7 @@ class FamilyHubGoalsCard extends HTMLElement {
     const rewardType = box.querySelector(".f-reward-type").value;
     payload.reward_type = rewardType;
     if (rewardType === GOAL_REWARD_TYPE_STARS) {
-      payload.star_value = parseInt(box.querySelector(".f-star-value").value, 10) || 0;
+      payload.star_value = __fhPtsOut(box.querySelector(".f-star-value").value, (box.querySelector(".f-assigned") || {}).value);
       payload.reward_item_id = null;
     } else {
       payload.reward_item_id = box.querySelector(".f-reward-item").value || null;
@@ -1641,6 +1706,7 @@ class FamilyHubGoalsCard extends HTMLElement {
       return item ? `${item.icon || "&#127873;"} ${this._esc(item.title)}` : this._t("goals.reward_unavailable", "(reward no longer available)");
     }
     const stars = goal.star_value || 0;
+    if (__fhCurOn(goal.assigned_to)) return __fhPts(stars, goal.assigned_to);
     const starsText = stars === 1
       ? this._t("goals.stars_one", "%n% star", { n: stars })
       : this._t("goals.stars_other", "%n% stars", { n: stars });

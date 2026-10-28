@@ -52,7 +52,7 @@ from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from aiohttp import web
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import __version__ as HA_CORE_VERSION
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 # CalendarEntityFeature/DATA_COMPONENT - needed to delete/update/create
 # calendar events directly against the entity (entity.async_delete_event/
 # async_update_event/async_create_event), the same way Home Assistant's
@@ -182,6 +182,8 @@ from .const import (
     SERVICE_APPROVE_CHORE,
     SERVICE_REJECT_CHORE,
     SERVICE_NUDGE_USER,
+    SERVICE_ADJUST_BALANCE,
+    SERVICE_PAY_OUT,
     SERVICE_CANCEL_TIMER,
     SERVICE_START_TIMER,
     SERVICE_STOP_TIMER_ALARM,
@@ -2669,12 +2671,7 @@ async def _ws_set_settings(
         existing = await store.async_load() or {}
         if SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED not in new_settings and existing.get(SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED):
             new_settings[SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED] = True
-        # jordan fork: per-person currency keys (see const.py) - only the
-        # Rewards card's own toggle sends them, so a Settings save from any
-        # other card must not drop them.
-        for key in (SETTINGS_KEY_CURRENCY_USER_IDS, SETTINGS_KEY_CURRENCY_SYMBOL):
-            if key not in new_settings and key in existing:
-                new_settings[key] = existing[key]
+        reward_engine.carry_forward_currency_settings(new_settings, existing)
         # Root cause: the exact
         # same class of bug this handler's own docstring already describes
         # for SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED and kiosk PIN hashes -
@@ -12106,6 +12103,54 @@ async def _async_register_chore_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_APPROVE_CHORE, _handle_approve_chore)
     hass.services.async_register(DOMAIN, SERVICE_REJECT_CHORE, _handle_reject_chore)
     hass.services.async_register(DOMAIN, SERVICE_NUDGE_USER, _handle_nudge_user)
+
+    # jordan fork: balances from automations - a payday "Mark paid" button,
+    # bonuses, corrections. Amounts are in the person's own units: dollars
+    # for someone on real money (converted to the stored cents), stars
+    # otherwise.
+    async def _amount_in_stored_units(entry_data: dict[str, Any], user_id: str, amount: Any) -> int:
+        settings = await entry_data["settings_store"].async_load() or {}
+        value = float(amount)
+        return round(value * 100) if reward_engine.is_currency_user(settings, user_id) else round(value)
+
+    async def _save_rewards_native(entry_data: dict[str, Any]) -> None:
+        await entry_data["rewards_store"].async_save(entry_data["rewards"])
+        await chores_store.backup_rewards(hass, entry_data["rewards"])
+
+    async def _handle_adjust_balance(call: ServiceCall) -> None:
+        entry_data = _get_family_hub_entry_data(hass)
+        if entry_data is None:
+            _LOGGER.warning("Family Hub: %s called but Family Hub isn't set up", SERVICE_ADJUST_BALANCE)
+            return
+        user_id = call.data["user_id"]
+        delta = await _amount_in_stored_units(entry_data, user_id, call.data["amount"])
+        if delta == 0:
+            return
+        reward_engine.add_stars(entry_data["rewards"], user_id, delta, reason=call.data.get("reason") or None)
+        await _save_rewards_native(entry_data)
+
+    async def _handle_pay_out(call: ServiceCall) -> ServiceResponse:
+        entry_data = _get_family_hub_entry_data(hass)
+        if entry_data is None:
+            raise HomeAssistantError("Family Hub isn't set up")
+        user_id = call.data["user_id"]
+        amount = call.data.get("amount")
+        stored = None if amount is None else await _amount_in_stored_units(entry_data, user_id, amount)
+        try:
+            result = reward_engine.pay_out(entry_data["rewards"], user_id, stored, call.data.get("reason") or "")
+        except reward_engine.RewardError as err:
+            raise HomeAssistantError(str(err)) from err
+        await _save_rewards_native(entry_data)
+        settings = await entry_data["settings_store"].async_load() or {}
+        return {
+            "amount": result["amount"],
+            "balance": result["balance"],
+            "amount_text": reward_engine.format_amount(settings, user_id, result["amount"]),
+            "balance_text": reward_engine.format_amount(settings, user_id, result["balance"]),
+        }
+
+    hass.services.async_register(DOMAIN, SERVICE_ADJUST_BALANCE, _handle_adjust_balance)
+    hass.services.async_register(DOMAIN, SERVICE_PAY_OUT, _handle_pay_out, supports_response=SupportsResponse.OPTIONAL)
 
     # v1.168.74: timers from automations, scripts and voice.
     async def _resolve_user(value: Any) -> str:
