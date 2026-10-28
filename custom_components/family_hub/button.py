@@ -54,6 +54,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from . import _get_member_user_ids
 from . import device_settings_entity_shared as shared
 from .const import DAILY_DIGEST_EVENT_OPEN, DOMAIN
 
@@ -65,7 +66,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     if entry_data is None:
         _LOGGER.warning("Family Hub: button platform set up before the integration's own entry data existed - skipping")
         return
-    users = [u for u in await hass.auth.async_get_users() if not getattr(u, "system_generated", False)]
+    # Only Family Hub members get a Daily Digest button - service logins (an
+    # MQTT broker user, a shop PC) are never digest recipients. Someone added
+    # as a member later gets theirs on the next reload/restart.
+    store = entry_data.get("settings_store")
+    members = _get_member_user_ids(await store.async_load() if store else None)
+    users = [
+        u for u in await hass.auth.async_get_users()
+        if not getattr(u, "system_generated", False) and u.id in members
+    ]
     entities: list[ButtonEntity] = [
         FamilyHubDailyDigestButton(entry.entry_id, u.id, u.name or u.id)
         for u in users
