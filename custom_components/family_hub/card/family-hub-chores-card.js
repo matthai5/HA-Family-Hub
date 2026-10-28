@@ -34,6 +34,49 @@ var __fhT = function (key, fb, vars, mode) {
   }
   return str;
 };
+// ---- Family Hub per-person currency helper (jordan fork) -----------------
+// Settings' currencyUserIds lists the people whose stars are real money:
+// every star amount of theirs (chore star_value/penalty, balance, history)
+// is a whole number of cents and shows as "$0.50" instead of "⭐ 50".
+// Storage never changes - this only affects display and number inputs.
+// Everyone else, and anything shared (the reward catalog), stays in stars.
+// Each card calls __fhCurSet(settings) after reading Settings. Identical
+// copy in every Family Hub card that shows stars.
+var __fhCur = (window.__familyHubCurrency = window.__familyHubCurrency || { ids: [], symbol: "$" });
+var __fhCurSet = function (settings) {
+  var g = window.__familyHubCurrency || __fhCur;
+  g.ids = settings && Array.isArray(settings.currencyUserIds) ? settings.currencyUserIds.slice() : [];
+  g.symbol = (settings && typeof settings.currencySymbol === "string" && settings.currencySymbol) || "$";
+};
+var __fhCurOn = function (userId) {
+  return !!userId && (window.__familyHubCurrency || __fhCur).ids.indexOf(userId) !== -1;
+};
+var __fhCurSym = function () {
+  return (window.__familyHubCurrency || __fhCur).symbol;
+};
+// An amount with its unit: "$0.50" for a currency user, "&#11088; 50"
+// otherwise. opts.signed adds a leading +, opts.suffix gives "50&#11088;".
+var __fhPts = function (n, userId, opts) {
+  opts = opts || {};
+  var v = Number(n) || 0;
+  var sign = v < 0 ? "&minus;" : opts.signed && v > 0 ? "+" : "";
+  if (__fhCurOn(userId)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
+  return opts.suffix ? sign + Math.abs(v) + "&#11088;" : "&#11088; " + sign + Math.abs(v);
+};
+// Number inputs holding an amount: the value to show, the step attribute,
+// and the stored amount read back (cents for a currency user).
+var __fhPtsIn = function (n, userId) {
+  var v = Number(n) || 0;
+  return __fhCurOn(userId) ? (v / 100).toFixed(2) : String(v);
+};
+var __fhPtsStep = function (userId) {
+  return __fhCurOn(userId) ? 'step="0.01"' : 'step="1"';
+};
+var __fhPtsOut = function (s, userId) {
+  var v = parseFloat(s);
+  if (!isFinite(v)) return 0;
+  return Math.round(__fhCurOn(userId) ? v * 100 : v);
+};
 var __fhUseHass = function (hass) {
   if (hass && typeof hass.localize === "function") (window.__familyHubI18n || __fhI18n).hass = hass;
 };
@@ -2273,6 +2316,7 @@ class FamilyHubChoresCard extends HTMLElement {
     } catch (e) {
       if (!this._settingsCache) this._settingsCache = this._defaultSettings();
     }
+    __fhCurSet(this._settingsCache);
     this._applyThemeVars();
     // goalsShowInChores can change out from under a card that's
     // already on screen (someone flips it in Settings and Saves without
@@ -2759,6 +2803,7 @@ class FamilyHubChoresCard extends HTMLElement {
       const merged = Object.assign({}, fresh, { choresShowRewardsColumn: next });
       await this._hass.connection.sendMessagePromise({ type: "family_hub/set_settings", settings: merged });
       this._settingsCache = Object.assign(this._defaultSettings(), merged);
+      __fhCurSet(this._settingsCache);
       if (next) await this._fetchRewardsState();
     } catch (e) {
       /* no-op - button just stays in its last-known state */
@@ -3332,7 +3377,7 @@ class FamilyHubChoresCard extends HTMLElement {
       <div class="chore-card status-approved waiting-recur-card" data-id="${chore.id}">
         <div class="chore-title">${this._esc(chore.title)}</div>
         <div class="chore-meta">
-          <span class="chore-stars">&#11088; ${chore.star_value || 0}</span>
+          <span class="chore-stars">${__fhPts(chore.star_value, chore.assigned_to)}</span>
         </div>
         <div class="waiting-recur-desc">${this._recurDescriptionHtml(chore)}</div>
         <div class="waiting-recur-owner">${this._t("chores.last_done_by_x", `Last done by ${this._esc(this._userName(chore.assigned_to))}`, { x: this._esc(this._userName(chore.assigned_to)) })}</div>
@@ -3395,7 +3440,7 @@ class FamilyHubChoresCard extends HTMLElement {
       <div class="rewards-balance-row" style="border-color:${this._userColor(user.id)}">
         <span class="rewards-balance-dot" style="background:${this._userColor(user.id)}"></span>
         <span class="rewards-balance-name">${this._esc(user.name)}</span>
-        <span class="rewards-balance-stars">&#11088; ${bal}</span>
+        <span class="rewards-balance-stars">${__fhPts(bal, user.id)}</span>
       </div>
     `;
   }
@@ -3897,7 +3942,7 @@ class FamilyHubChoresCard extends HTMLElement {
       <div class="chore-card status-${status}${chore.important ? " chore-important" : ""}" draggable="${this._canAssign() && status === "open" ? "true" : "false"}" data-id="${chore.id}">
         <div class="chore-title">${importantBadge}${this._esc(chore.title)}</div>
         <div class="chore-meta">
-          <span class="chore-stars">&#11088; ${chore.star_value || 0}</span>
+          <span class="chore-stars">${__fhPts(chore.star_value, chore.assigned_to)}</span>
           ${due}
           ${streak}
           ${quantityBadge}
@@ -3958,7 +4003,7 @@ class FamilyHubChoresCard extends HTMLElement {
         <span>${this._esc(assigneeName)}</span>
       </div>
       <div class="detail-stats">
-        <span class="detail-stat">&#11088; ${chore.star_value || 0} star${chore.star_value === 1 ? "" : "s"}</span>
+        <span class="detail-stat">${__fhCurOn(chore.assigned_to) ? __fhPts(chore.star_value, chore.assigned_to) : `&#11088; ${chore.star_value || 0} star${chore.star_value === 1 ? "" : "s"}`}</span>
         ${due ? `<span class="detail-stat">${__fhT("text.due_x", "📅 Due %0%", {0: this._esc(due)}, "h")}</span>` : ""}
         ${chore.overdue_penalty ? `<span class="detail-stat">${__fhT("text.x_if_overdue", "⚠ -%0% if overdue", {0: chore.overdue_penalty}, "h")}</span>` : ""}
         ${chore.streak_count > 0 ? `<span class="detail-stat">&#128293; ${chore.streak_count} streak</span>` : ""}
@@ -4581,10 +4626,10 @@ class FamilyHubChoresCard extends HTMLElement {
         <div class="field f-multi-assign-field" style="display:none"><label>Assigned to (everyone checked gets their own copy of this chore)</label>
           <div class="f-assigned-multi-list">${this._memberUsers().map((u) => `<label class="remind-check-opt"><input type="checkbox" class="f-assigned-multi" value="${u.id}" /> ${this._esc(u.name)}</label>`).join("")}</div>
         </div>
-        <div class="field"><label>Star value</label><input type="number" class="f-stars" min="0" value="0"></div>
+        <div class="field"><label class="f-stars-label" data-star-text="Star value">Star value</label><input type="number" class="f-stars" min="0" value="0"></div>
         <div class="field"><label>Due date</label><input type="datetime-local" class="f-due"></div>
         ${this._remindFieldsHtml(null)}
-        <div class="field"><label>Overdue penalty (stars)</label><input type="number" class="f-penalty" min="0" value="0"></div>
+        <div class="field"><label class="f-penalty-label" data-star-text="Overdue penalty (stars)">Overdue penalty (stars)</label><input type="number" class="f-penalty" min="0" value="0"></div>
         <!-- - so
              Important/No-approval, Quantity, Timer, Notes, Depends on, and
              Rotation group live inside "Advanced Settings". v198 then also
@@ -4666,6 +4711,14 @@ class FamilyHubChoresCard extends HTMLElement {
     const multiAssignToggle = box.querySelector(".f-multi-assign");
     const multiAssignField = box.querySelector(".f-multi-assign-field");
     const singleAssignField = box.querySelector(".f-assigned").closest(".field");
+    // box outlives each open (only its innerHTML is redrawn), so wire once
+    if (!box._fhPtsWired) {
+      box._fhPtsWired = true;
+      box.addEventListener("change", (e) => {
+        if (e.target.closest(".f-mode, .f-assigned, .f-multi-assign, .f-assigned-multi")) this._syncPtsFormFields(box, this._ptsFormUser(box));
+      });
+    }
+    this._syncPtsFormFields(box, this._ptsFormUser(box));
     const syncMultiAssignFields = () => {
       const on = multiAssignToggle.checked;
       multiAssignField.style.display = on ? "" : "none";
@@ -5430,8 +5483,8 @@ class FamilyHubChoresCard extends HTMLElement {
       type: "family_hub/chores/create",
       title,
       assignment_mode: mode,
-      star_value: parseInt(box.querySelector(".f-stars").value, 10) || 0,
-      overdue_penalty: parseInt(box.querySelector(".f-penalty").value, 10) || 0,
+      star_value: __fhPtsOut(box.querySelector(".f-stars").value, this._ptsFormUser(box)),
+      overdue_penalty: __fhPtsOut(box.querySelector(".f-penalty").value, this._ptsFormUser(box)),
       notes: box.querySelector(".f-notes").value.trim(),
       dependencies: Array.from(box.querySelector(".f-deps").selectedOptions).map((o) => o.value),
       no_approval_required: box.querySelector(".f-no-approval").checked,
@@ -5518,6 +5571,28 @@ class FamilyHubChoresCard extends HTMLElement {
   // permission/status check, since the backend is the real enforcement
   // point either way (ws_update_chore re-checks PERMISSION_ASSIGN, and
   // update_chore itself re-checks status === open).
+  // Whose units the create form's Star value/penalty boxes are in (see
+  // __fhCurOn): a single direct assignee, or a multi-assign where every
+  // checked person uses currency. Anything else is in stars.
+  _ptsFormUser(box) {
+    const modeSel = box.querySelector(".f-mode");
+    if (modeSel && modeSel.value !== "direct") return null;
+    const multi = box.querySelector(".f-multi-assign");
+    if (multi && multi.checked) {
+      const ids = Array.from(box.querySelectorAll(".f-assigned-multi:checked")).map((cb) => cb.value);
+      return ids.length && ids.every((id) => __fhCurOn(id)) ? ids[0] : null;
+    }
+    const sel = box.querySelector(".f-assigned");
+    return sel ? sel.value : null;
+  }
+  _syncPtsFormFields(box, userId) {
+    const on = __fhCurOn(userId);
+    box.querySelectorAll(".f-stars, .f-penalty").forEach((input) => { input.step = on ? "0.01" : "1"; });
+    const starsLabel = box.querySelector(".f-stars-label");
+    if (starsLabel) starsLabel.textContent = on ? `Pay (${__fhCurSym()})` : starsLabel.dataset.starText;
+    const penaltyLabel = box.querySelector(".f-penalty-label");
+    if (penaltyLabel) penaltyLabel.textContent = on ? `Overdue penalty (${__fhCurSym()})` : penaltyLabel.dataset.starText;
+  }
   _openEditModal(choreId) {
     const chore = this._chores.find((c) => c.id === choreId);
     if (!chore) return;
@@ -5545,10 +5620,10 @@ class FamilyHubChoresCard extends HTMLElement {
       <button data-fh-aria="text.close" type="button" class="modal-close edit-modal-close" aria-label="${__fhT("text.close", "Close", null, "h")}">&#10005;</button>
       <h2 data-fh-t="text.edit_chore">${__fhT("text.edit_chore", "Edit chore", null, "h")}</h2>
       <div class="field"><label data-fh-t="text.title">${__fhT("text.title", "Title", null, "h")}</label><input type="text" class="f-title" value="${this._escAttr(chore.title)}"></div>
-      <div class="field"><label data-fh-t="text.star_value">${__fhT("text.star_value", "Star value", null, "h")}</label><input type="number" class="f-stars" min="0" value="${chore.star_value || 0}"></div>
+      <div class="field"><label data-fh-t="text.star_value">${__fhCurOn(chore.assigned_to) ? __fhEsc(`Pay (${__fhCurSym()})`) : __fhT("text.star_value", "Star value", null, "h")}</label><input type="number" class="f-stars" min="0" ${__fhPtsStep(chore.assigned_to)} value="${__fhPtsIn(chore.star_value, chore.assigned_to)}"></div>
       <div class="field"><label data-fh-t="text.due_date">${__fhT("text.due_date", "Due date", null, "h")}</label><input type="datetime-local" class="f-due" value="${this._isoToLocalDatetimeInputValue(chore.due_date)}"></div>
       ${this._remindFieldsHtml(chore)}
-      <div class="field"><label data-fh-t="text.overdue_penalty_stars">${__fhT("text.overdue_penalty_stars", "Overdue penalty (stars)", null, "h")}</label><input type="number" class="f-penalty" min="0" value="${chore.overdue_penalty || 0}"></div>
+      <div class="field"><label data-fh-t="text.overdue_penalty_stars">${__fhCurOn(chore.assigned_to) ? __fhEsc(`Overdue penalty (${__fhCurSym()})`) : __fhT("text.overdue_penalty_stars", "Overdue penalty (stars)", null, "h")}</label><input type="number" class="f-penalty" min="0" ${__fhPtsStep(chore.assigned_to)} value="${__fhPtsIn(chore.overdue_penalty, chore.assigned_to)}"></div>
       <!-- - see the
            create modal's own copy of this comment for the full history
            (v198's Automate sub-tab, then v211's split into three sibling
@@ -5615,6 +5690,8 @@ class FamilyHubChoresCard extends HTMLElement {
   }
 
   async _submitEdit(choreId, overlay, box) {
+    const editChore = this._chores.find((c) => c.id === choreId);
+    const editAssignee = editChore ? editChore.assigned_to : null;
     const errEl = box.querySelector(".form-error");
     errEl.textContent = "";
     const title = box.querySelector(".f-title").value.trim();
@@ -5626,8 +5703,8 @@ class FamilyHubChoresCard extends HTMLElement {
       type: "family_hub/chores/update",
       chore_id: choreId,
       title,
-      star_value: parseInt(box.querySelector(".f-stars").value, 10) || 0,
-      overdue_penalty: parseInt(box.querySelector(".f-penalty").value, 10) || 0,
+      star_value: __fhPtsOut(box.querySelector(".f-stars").value, editAssignee),
+      overdue_penalty: __fhPtsOut(box.querySelector(".f-penalty").value, editAssignee),
       no_approval_required: box.querySelector(".f-no-approval").checked,
       // same field as the create form - see its own comment.
       alarm_audience: box.querySelector(".f-alarm-audience").value,

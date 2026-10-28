@@ -152,6 +152,8 @@ from .const import (
     REMINDERS_STORAGE_VERSION,
     SETTINGS_KEY_USER_PROFILES,
     SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED,
+    SETTINGS_KEY_CURRENCY_SYMBOL,
+    SETTINGS_KEY_CURRENCY_USER_IDS,
     SETTINGS_KEY_MEMBER_USER_IDS,
     SETTINGS_KEY_WISHLIST_CLAIMS_PERMISSION_MIGRATED,
     SETTINGS_KEY_ROUTINES_ENABLED,
@@ -2657,6 +2659,8 @@ async def _ws_set_settings(
     chores_ws_api.strip_locked_popup_content(new_settings)
     needs_existing = (
         SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED not in new_settings
+        or SETTINGS_KEY_CURRENCY_USER_IDS not in new_settings
+        or SETTINGS_KEY_CURRENCY_SYMBOL not in new_settings
         or SETTINGS_KEY_WISHLIST_CLAIMS_PERMISSION_MIGRATED not in new_settings
         or "userProfiles" in new_settings
         or "people" in new_settings
@@ -2665,6 +2669,12 @@ async def _ws_set_settings(
         existing = await store.async_load() or {}
         if SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED not in new_settings and existing.get(SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED):
             new_settings[SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED] = True
+        # jordan fork: per-person currency keys (see const.py) - only the
+        # Rewards card's own toggle sends them, so a Settings save from any
+        # other card must not drop them.
+        for key in (SETTINGS_KEY_CURRENCY_USER_IDS, SETTINGS_KEY_CURRENCY_SYMBOL):
+            if key not in new_settings and key in existing:
+                new_settings[key] = existing[key]
         # Root cause: the exact
         # same class of bug this handler's own docstring already describes
         # for SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED and kiosk PIN hashes -
@@ -11917,7 +11927,7 @@ async def _notify_chore_approved_native(hass: HomeAssistant, entry_data: dict[st
     entry = _get_family_hub_entry(hass)
     data = _notification_click_data(entry) if entry else {}
     stars = int(chore.get("star_value") or 0)
-    stars_note = f" (+{stars} star{'s' if stars != 1 else ''})" if stars else ""
+    stars_note = f" (+{reward_engine.format_amount(settings, assignee, stars)})" if stars else ""
     message = f"\"{chore.get('title')}\" was approved{stars_note}!"
     for target in notify_targets:
         split_target = _split_notify_target(target)

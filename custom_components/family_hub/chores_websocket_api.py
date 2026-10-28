@@ -1350,7 +1350,7 @@ async def _notify_chore_approved(hass: HomeAssistant, entry_data: dict[str, Any]
     if not notify_targets:
         return
     stars = int(chore.get("star_value") or 0)
-    stars_note = f" (+{stars} star{'s' if stars != 1 else ''})" if stars else ""
+    stars_note = f" (+{reward_engine.format_amount(settings, assignee, stars)})" if stars else ""
     await _send_instant_notification(
         hass, notify_targets, "Family Hub chore approved",
         f"\"{chore.get('title')}\" was approved{stars_note}!",

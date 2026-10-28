@@ -34,6 +34,49 @@ var __fhT = function (key, fb, vars, mode) {
   }
   return str;
 };
+// ---- Family Hub per-person currency helper (jordan fork) -----------------
+// Settings' currencyUserIds lists the people whose stars are real money:
+// every star amount of theirs (chore star_value/penalty, balance, history)
+// is a whole number of cents and shows as "$0.50" instead of "⭐ 50".
+// Storage never changes - this only affects display and number inputs.
+// Everyone else, and anything shared (the reward catalog), stays in stars.
+// Each card calls __fhCurSet(settings) after reading Settings. Identical
+// copy in every Family Hub card that shows stars.
+var __fhCur = (window.__familyHubCurrency = window.__familyHubCurrency || { ids: [], symbol: "$" });
+var __fhCurSet = function (settings) {
+  var g = window.__familyHubCurrency || __fhCur;
+  g.ids = settings && Array.isArray(settings.currencyUserIds) ? settings.currencyUserIds.slice() : [];
+  g.symbol = (settings && typeof settings.currencySymbol === "string" && settings.currencySymbol) || "$";
+};
+var __fhCurOn = function (userId) {
+  return !!userId && (window.__familyHubCurrency || __fhCur).ids.indexOf(userId) !== -1;
+};
+var __fhCurSym = function () {
+  return (window.__familyHubCurrency || __fhCur).symbol;
+};
+// An amount with its unit: "$0.50" for a currency user, "&#11088; 50"
+// otherwise. opts.signed adds a leading +, opts.suffix gives "50&#11088;".
+var __fhPts = function (n, userId, opts) {
+  opts = opts || {};
+  var v = Number(n) || 0;
+  var sign = v < 0 ? "&minus;" : opts.signed && v > 0 ? "+" : "";
+  if (__fhCurOn(userId)) return sign + __fhEsc(__fhCurSym()) + (Math.abs(v) / 100).toFixed(2);
+  return opts.suffix ? sign + Math.abs(v) + "&#11088;" : "&#11088; " + sign + Math.abs(v);
+};
+// Number inputs holding an amount: the value to show, the step attribute,
+// and the stored amount read back (cents for a currency user).
+var __fhPtsIn = function (n, userId) {
+  var v = Number(n) || 0;
+  return __fhCurOn(userId) ? (v / 100).toFixed(2) : String(v);
+};
+var __fhPtsStep = function (userId) {
+  return __fhCurOn(userId) ? 'step="0.01"' : 'step="1"';
+};
+var __fhPtsOut = function (s, userId) {
+  var v = parseFloat(s);
+  if (!isFinite(v)) return 0;
+  return Math.round(__fhCurOn(userId) ? v * 100 : v);
+};
 var __fhUseHass = function (hass) {
   if (hass && typeof hass.localize === "function") (window.__familyHubI18n || __fhI18n).hass = hass;
 };
@@ -2327,6 +2370,7 @@ class FamilyHubRewardsCard extends HTMLElement {
     } catch (e) {
       if (!this._settingsCache) this._settingsCache = this._defaultSettings();
     }
+    __fhCurSet(this._settingsCache);
     this._applyThemeVars();
     // keep the FAB coordinator's picture of "does this card
     // currently offer a Goal tab" in sync with a live Settings change -
@@ -2742,8 +2786,8 @@ class FamilyHubRewardsCard extends HTMLElement {
     // _manageOpen (admin-only, same gate the delete button already has).
     const editBtn = e.target.closest(".manage-edit-btn");
     if (editBtn) return this._openCreateRewardModal(this._catalog.find((it) => it.id === editBtn.dataset.id));
-    if (e.target.closest(".adjust-plus-btn")) return this._adjustBalance(e.target.closest(".adjust-plus-btn").dataset.user, 1);
-    if (e.target.closest(".adjust-minus-btn")) return this._adjustBalance(e.target.closest(".adjust-minus-btn").dataset.user, -1);
+    if (e.target.closest(".adjust-plus-btn")) { const uid = e.target.closest(".adjust-plus-btn").dataset.user; return this._adjustBalance(uid, __fhCurOn(uid) ? 100 : 1); }
+    if (e.target.closest(".adjust-minus-btn")) { const uid = e.target.closest(".adjust-minus-btn").dataset.user; return this._adjustBalance(uid, __fhCurOn(uid) ? -100 : -1); }
     const giftBtn = e.target.closest(".gift-stars-btn");
     if (giftBtn) return this._openGiftStarsModal(giftBtn.dataset.user, giftBtn.dataset.name);
     const manageStarsBtn = e.target.closest(".manage-stars-for-btn");
@@ -3405,11 +3449,13 @@ class FamilyHubRewardsCard extends HTMLElement {
       <h2>&#11088; ${this._t("rewards.manage_stars.heading", "Manage stars")}</h2>
       <div class="field"><label>${this._t("rewards.manage_stars.who_label", "Who")}</label>
         <select class="manage-stars-user">
-          ${members.map((u) => `<option value="${u.id}" ${u.id === preselect ? "selected" : ""}>${this._esc(u.name)} (${this._balances[u.id] || 0} &#11088;)</option>`).join("")}
+          ${members.map((u) => `<option value="${u.id}" ${u.id === preselect ? "selected" : ""}>${this._esc(u.name)} (${__fhPts(this._balances[u.id] || 0, u.id, { suffix: true })})</option>`).join("")}
         </select>
       </div>
       <button type="button" class="manage-stars-history-btn">&#128220; ${this._t("rewards.manage_stars.view_history_btn", "View star history")}</button>
+      <label class="manage-stars-currency-opt"><input type="checkbox" class="manage-stars-currency" ${__fhCurOn(preselect) ? "checked" : ""}> Real money (each star = 1&cent;)</label>
       <div class="preset-row manage-stars-preset-row">${presetBtns}</div>
+      <button type="button" class="preset-btn manage-stars-all-btn" hidden></button>
       <div class="field"><label>${this._t("rewards.manage_stars.custom_amount_label", "Or a custom amount")}</label><input type="number" class="manage-stars-amount" min="1" step="1" placeholder="${this._t("rewards.manage_stars.custom_amount_placeholder", "e.g. 5")}"></div>
       <div class="manage-stars-sign-row">
         <button type="button" class="manage-stars-sign-btn manage-stars-add" data-sign="1">&#43; ${this._t("common.add", "Add")}</button>
@@ -3425,6 +3471,56 @@ class FamilyHubRewardsCard extends HTMLElement {
     box.querySelector(".manage-stars-close").addEventListener("click", () => this._closeManageStarsModal());
     this._manageStarsSign = 1;
     const amountInput = box.querySelector(".manage-stars-amount");
+    // A currency user's amounts are dollars: presets become $1/$5/$10, the
+    // box takes cents, and "Pay out all" fills in the whole balance owed so
+    // recording a FamZoo transfer is Subtract + reason.
+    const syncCurrency = () => {
+      const uid = box.querySelector(".manage-stars-user").value;
+      const on = __fhCurOn(uid);
+      amountInput.step = on ? "0.01" : "1";
+      amountInput.min = on ? "0.01" : "1";
+      box.querySelectorAll(".manage-stars-preset-btn").forEach((b) => {
+        b.textContent = on ? `${__fhCurSym()}${b.dataset.amount}` : b.dataset.amount;
+      });
+      const allBtn = box.querySelector(".manage-stars-all-btn");
+      const bal = this._balances[uid] || 0;
+      allBtn.hidden = !(on && bal > 0);
+      allBtn.innerHTML = `Pay out all (${__fhPts(bal, uid)})`;
+      allBtn.dataset.amount = __fhPtsIn(bal, uid);
+    };
+    syncCurrency();
+    box.querySelector(".manage-stars-user").addEventListener("change", () => {
+      box.querySelector(".manage-stars-currency").checked = __fhCurOn(box.querySelector(".manage-stars-user").value);
+      syncCurrency();
+    });
+    // Flips the selected person between stars and money. Their stored
+    // numbers don't change, only how they read - so switching someone with
+    // a 50-star balance over makes it $0.50.
+    box.querySelector(".manage-stars-currency").addEventListener("change", async (e) => {
+      const uid = box.querySelector(".manage-stars-user").value;
+      const on = e.currentTarget.checked;
+      try {
+        const result = await this._hass.connection.sendMessagePromise({ type: "family_hub/get_settings" });
+        const fresh = (result && result.settings && typeof result.settings === "object") ? result.settings : (this._settingsCache || {});
+        const ids = (Array.isArray(fresh.currencyUserIds) ? fresh.currencyUserIds : []).filter((id) => id !== uid);
+        if (on) ids.push(uid);
+        const merged = Object.assign({}, fresh, { currencyUserIds: ids });
+        await this._hass.connection.sendMessagePromise({ type: "family_hub/set_settings", settings: merged });
+        this._settingsCache = Object.assign(this._defaultSettings(), merged);
+        __fhCurSet(this._settingsCache);
+      } catch (err) {
+        e.currentTarget.checked = !on;
+      }
+      this._render();
+      this._openManageStarsModal(uid);
+    });
+    box.querySelector(".manage-stars-all-btn").addEventListener("click", (e) => {
+      amountInput.value = e.currentTarget.dataset.amount;
+      this._manageStarsSign = -1;
+      markSign();
+      const reasonEl = box.querySelector(".manage-stars-reason");
+      if (!reasonEl.value.trim()) reasonEl.value = "Paid out";
+    });
     const markSign = () => {
       box.querySelector(".manage-stars-add").classList.toggle("selected", this._manageStarsSign === 1);
       box.querySelector(".manage-stars-subtract").classList.toggle("selected", this._manageStarsSign === -1);
@@ -3483,7 +3579,7 @@ class FamilyHubRewardsCard extends HTMLElement {
     const box = overlay.querySelector(".modal-box");
     const errEl = box.querySelector(".manage-stars-error");
     const userId = box.querySelector(".manage-stars-user").value;
-    const amount = parseInt(box.querySelector(".manage-stars-amount").value, 10);
+    const amount = __fhPtsOut(box.querySelector(".manage-stars-amount").value, userId);
     const reason = (box.querySelector(".manage-stars-reason").value || "").trim();
     if (!userId) {
       errEl.textContent = this._t("rewards.manage_stars.pick_who", "Pick who this is for.");
@@ -3577,12 +3673,12 @@ class FamilyHubRewardsCard extends HTMLElement {
   _historyEventRow(kind, entry) {
     if (kind === "ledger") {
       const positive = entry.delta > 0;
-      const icons = { chore_approved: "&#11088;", chore_overdue: "&#9888;", redeemed: "&#127873;", redemption_reversed: "&#8634;", manual_adjustment: "&#9998;" };
+      const icons = { chore_approved: __fhCurOn(entry.user_id) ? "&#128176;" : "&#11088;", chore_overdue: "&#9888;", redeemed: "&#127873;", redemption_reversed: "&#8634;", manual_adjustment: "&#9998;" };
       return {
         at: entry.at,
         icon: icons[entry.source] || (positive ? "&#11088;" : "&#9888;"),
         label: entry.reason || (positive ? this._t("rewards.history.stars_added", "Stars added") : this._t("rewards.history.stars_deducted", "Stars deducted")),
-        detail: `${positive ? "+" : ""}${entry.delta} &#11088; (balance ${entry.balance_after})`,
+        detail: `${__fhPts(entry.delta, entry.user_id, { signed: true, suffix: true })} (balance ${__fhPts(entry.balance_after, entry.user_id, { suffix: true })})`,
       };
     }
     if (kind === "redemption") {
@@ -3645,7 +3741,7 @@ class FamilyHubRewardsCard extends HTMLElement {
     // never shown on the viewer's own card (there's nothing to gift to
     // yourself - reward_engine.gift_stars rejects it server-side too, this
     // is just the frontend not offering a button that would always fail).
-    const canGift = user.id !== this._myUserId();
+    const canGift = user.id !== this._myUserId() && __fhCurOn(user.id) === __fhCurOn(this._myUserId());
     // For someone who can_override_rewards, clicking the name
     // itself now opens the Manage Stars modal pre-selected to that person,
     // taking over the spot that used to always open Star
@@ -3663,7 +3759,7 @@ class FamilyHubRewardsCard extends HTMLElement {
       <div class="balance-card" style="border-color:${this._userColor(user.id)}">
         <span class="balance-dot" style="background:${this._userColor(user.id)}"></span>
         <button type="button" class="balance-name" data-user="${user.id}" title="${nameTitle}">${this._esc(user.name)}</button>
-        <span class="balance-stars">&#11088; ${bal}</span>
+        <span class="balance-stars">${__fhPts(bal, user.id)}</span>
         ${canGift ? `<button type="button" class="gift-stars-btn" data-user="${user.id}" data-name="${this._esc(user.name)}" title="${this._t("rewards.balance.gift_title", "Gift some of your own stars to %name%", { name: this._esc(user.name) })}">&#127873;</button>` : ""}
         ${canManage ? `<button type="button" class="manage-stars-for-btn" data-user="${user.id}" title="${this._t("rewards.balance.manage_title", "Manually add or subtract %name%'s stars", { name: this._esc(user.name) })}">&#9998;</button>` : ""}
         ${isAdmin ? `<span class="balance-adjust"><button class="adjust-minus-btn" data-user="${user.id}">-</button><button class="adjust-plus-btn" data-user="${user.id}">+</button></span>` : ""}
@@ -3951,7 +4047,10 @@ class FamilyHubRewardsCard extends HTMLElement {
          button, so it doesn't compete with Save/Cancel or the Add/Subtract
          toggle for attention - it's a secondary way out of this modal, not
          part of the add/subtract task the modal is otherwise entirely for. */
-      .manage-stars-history-btn { display: block; border: none; background: none; padding: 4px 0 2px; margin: 0 0 8px; font: inherit; font-size: 12px; font-weight: 700; color: var(--fc-accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+      .manage-stars-currency-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0 8px; }
+      .manage-stars-currency-opt input { width: auto; margin: 0; }
+      .manage-stars-all-btn { margin: 0 0 8px; }
+      .manage-stars-history-btn {display: block; border: none; background: none; padding: 4px 0 2px; margin: 0 0 8px; font: inherit; font-size: 12px; font-weight: 700; color: var(--fc-accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
       .manage-stars-sign-row { display: flex; gap: 8px; margin: 8px 0; }
       .manage-stars-sign-btn { flex: 1; border: 2px solid var(--fc-border); border-radius: 10px; padding: 8px; font-weight: 700; background: var(--fc-card); color: var(--fc-text); cursor: pointer; }
       .manage-stars-sign-btn.selected { background: var(--fc-accent); color: var(--fc-accent-text); border-color: var(--fc-accent); }

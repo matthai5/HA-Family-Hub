@@ -57,6 +57,8 @@ from homeassistant.util import dt as dt_util
 from . import timer_engine
 from .const import (
     REWARD_KEY_ALARM_AUDIENCE,
+    SETTINGS_KEY_CURRENCY_SYMBOL,
+    SETTINGS_KEY_CURRENCY_USER_IDS,
     REWARD_KEY_TIMER_MINUTES,
     REWARD_REDEEM_MODE_BANKED,
     REWARD_REDEEM_MODE_INSTANT,
@@ -134,6 +136,22 @@ LEDGER_SOURCE_MANUAL_ADJUSTMENT = "manual_adjustment"
 # instead of on a catalog item).
 LEDGER_SOURCE_GIFT_SENT = "gift_sent"
 LEDGER_SOURCE_GIFT_RECEIVED = "gift_received"
+
+
+def is_currency_user(settings: Optional[dict[str, Any]], user_id: Optional[str]) -> bool:
+    """Whether user_id's stars are cents - see const.py's
+    SETTINGS_KEY_CURRENCY_USER_IDS."""
+    ids = (settings or {}).get(SETTINGS_KEY_CURRENCY_USER_IDS)
+    return bool(user_id) and isinstance(ids, list) and user_id in ids
+
+
+def format_amount(settings: Optional[dict[str, Any]], user_id: Optional[str], amount: int) -> str:
+    """A star amount as notification text: "$0.50" for a currency user,
+    otherwise "50 stars" / "1 star"."""
+    if is_currency_user(settings, user_id):
+        symbol = (settings or {}).get(SETTINGS_KEY_CURRENCY_SYMBOL) or "$"
+        return f"{'-' if amount < 0 else ''}{symbol}{abs(amount) / 100:.2f}"
+    return f"{amount} star{'s' if amount != 1 else ''}"
 
 
 def add_stars(

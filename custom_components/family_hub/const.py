@@ -1317,6 +1317,12 @@ SETTINGS_KEY_USER_PROFILES = "userProfiles"
 # one-time migration never re-runs and clobbers hand-edited profiles with a
 # second, stale pass over the old flat data.
 SETTINGS_KEY_NOTIFY_PROFILES_MIGRATED = "notifyProfilesMigrated"
+# jordan fork: user ids whose stars are real money - each of their star
+# amounts is a whole number of cents, shown as "$0.50" (see the cards'
+# __fhCurSet helper and reward_engine.format_amount). Everyone else keeps
+# plain stars. currencySymbol is the symbol shown, "$" when unset.
+SETTINGS_KEY_CURRENCY_USER_IDS = "currencyUserIds"
+SETTINGS_KEY_CURRENCY_SYMBOL = "currencySymbol"
 
 DEFAULT_DIGEST_SECTIONS = {
     "calendar": True,
