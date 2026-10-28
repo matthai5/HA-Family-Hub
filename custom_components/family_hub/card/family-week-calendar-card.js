@@ -9653,9 +9653,13 @@ return !!(entityId && this._hass && this._hass.states && this._hass.states[entit
 // it in by hand.
 async _ensureUserTodoLists() {
 if (!this._hass || !Array.isArray(this._notifyProfileUsersCache)) return;
+// Only Family Hub members get lists. list_users returns every HA login,
+// including service accounts (an MQTT broker user, a shop PC) that are
+// never added to Family Hub and shouldn't get Reminders/Wish List lists.
+const memberIds = new Set(this._getSettings().memberUserIds || []);
 for (const user of this._notifyProfileUsersCache) {
 const userId = user && user.id;
-if (!userId || this._userTodoListsEnsuredFor.has(userId)) continue;
+if (!userId || !memberIds.has(userId) || this._userTodoListsEnsuredFor.has(userId)) continue;
 this._userTodoListsEnsuredFor.add(userId);
 const profiles = this._getSettings().userProfiles || {};
 const profile = Object.assign({}, this._defaultUserProfile(), profiles[userId] || {});
